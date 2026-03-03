@@ -32,6 +32,8 @@ import java.awt.event.MouseWheelEvent;
 import java.awt.event.MouseWheelListener;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.event.KeyEvent;
+import java.awt.event.KeyAdapter;
 import java.io.File;
 import java.io.BufferedReader;
 import java.io.FileReader;
@@ -701,12 +703,14 @@ class TrackPanel extends JPanel {
 
         try {
             String fileName = file.getName().toLowerCase();
+            System.out.println("Загрузка файла: " + file.getAbsolutePath());
+
             if (fileName.endsWith(".txt")) {
                 loadFromTxt(file);
             } else if (fileName.endsWith(".xml")) {
                 loadFromXml(file);
             } else {
-                JOptionPane.showMessageDialog(this, 
+                JOptionPane.showMessageDialog(this,
                     "Неподдерживаемый формат файла. Используйте .txt или .xml",
                     "Ошибка",
                     JOptionPane.ERROR_MESSAGE);
@@ -724,16 +728,23 @@ class TrackPanel extends JPanel {
 
                 JOptionPane.showMessageDialog(this,
                     "Загружено " + geoDataList.size() + " точек\n" +
-                    "Первая точка установлена как цель",
+                    "Первая точка \"" + geoDataList.get(0).name + "\" установлена как цель",
                     "Успех",
                     JOptionPane.INFORMATION_MESSAGE);
+            } else {
+                JOptionPane.showMessageDialog(this,
+                    "Не найдено точек в файле. Проверьте формат данных.",
+                    "Предупреждение",
+                    JOptionPane.WARNING_MESSAGE);
             }
 
             repaint();
 
         } catch (Exception e) {
+            e.printStackTrace();
             JOptionPane.showMessageDialog(this,
-                "Ошибка загрузки файла: " + e.getMessage(),
+                "Ошибка загрузки файла: " + e.getMessage() + "\n" +
+                "Проверьте формат файла и кодировку.",
                 "Ошибка",
                 JOptionPane.ERROR_MESSAGE);
         }
@@ -742,31 +753,69 @@ class TrackPanel extends JPanel {
     private void loadFromTxt(File file) throws IOException {
         try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
             String line;
+            int lineNumber = 0;
             while ((line = reader.readLine()) != null) {
+                lineNumber++;
                 line = line.trim();
+
+                // Пропускаем пустые строки и комментарии
                 if (line.isEmpty() || line.startsWith("#") || line.startsWith("//")) {
                     continue;
                 }
 
-                String[] parts = line.split("[,\\s]+");
-                if (parts.length >= 3) {
-                    try {
-                        String name = parts[0];
-                        double lat = Double.parseDouble(parts[1]);
-                        double lon = Double.parseDouble(parts[2]);
-                        double alt = (parts.length >= 4) ? Double.parseDouble(parts[3]) : 0.0;
+                // Пропускаем строку с заголовком
+                if (line.toLowerCase().contains("название") ||
+                    line.toLowerCase().contains("широта") ||
+                    line.toLowerCase().contains("долгота")) {
+                    continue;
+                }
+
+                try {
+                    // Разделяем по запятой или табуляции
+                    String[] parts;
+                    if (line.contains(",")) {
+                        parts = line.split(",");
+                    } else if (line.contains(";")) {
+                        parts = line.split(";");
+                    } else if (line.contains("\t")) {
+                        parts = line.split("\t");
+                    } else {
+                        parts = line.split("\\s+"); // По пробелам
+                    }
+
+                    if (parts.length >= 3) {
+                        // Очищаем части от лишних пробелов
+                        String name = parts[0].trim();
+
+                        // Заменяем запятые на точки в числах
+                        String latStr = parts[1].trim().replace(',', '.');
+                        String lonStr = parts[2].trim().replace(',', '.');
+
+                        double lat = Double.parseDouble(latStr);
+                        double lon = Double.parseDouble(lonStr);
+                        double alt = 0.0;
+
+                        if (parts.length >= 4) {
+                            String altStr = parts[3].trim().replace(',', '.');
+                            if (!altStr.isEmpty()) {
+                                alt = Double.parseDouble(altStr);
+                            }
+                        }
 
                         geoDataList.add(new GeoData(name, lat, lon, alt));
-                    } catch (NumberFormatException e) {
-                        System.err.println("Ошибка парсинга строки: " + line);
+                        System.out.println("Загружена точка: " + name + " " + lat + " " + lon);
+                    } else {
+                        System.err.println("Строка " + lineNumber + " содержит недостаточно данных: " + line);
                     }
+                } catch (NumberFormatException e) {
+                    System.err.println("Ошибка парсинга строки " + lineNumber + ": " + line);
+                    System.err.println("Ошибка: " + e.getMessage());
                 }
             }
         }
     }
 
     private void loadFromXml(File file) throws IOException {
-        // Упрощённый парсинг XML
         try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
             StringBuilder content = new StringBuilder();
             String line;
@@ -776,36 +825,63 @@ class TrackPanel extends JPanel {
 
             String xml = content.toString();
 
-            // Очень простой парсинг для демонстрации
-            String[] points = xml.split("<point>|</point>");
+            // Более надёжный парсинг XML
+            String[] points = xml.split("<point>|</point>|<Point>|</Point>");
             for (String point : points) {
-                if (point.contains("<name>") && point.contains("<lat>") && point.contains("<lon>")) {
-                    String name = extractXmlTag(point, "name");
-                    String latStr = extractXmlTag(point, "lat");
-                    String lonStr = extractXmlTag(point, "lon");
-                    String altStr = extractXmlTag(point, "alt");
+                if (point.contains("<name>") || point.contains("<Name>") ||
+                    point.contains("<lat>") || point.contains("<Lat>") ||
+                    point.contains("<lon>") || point.contains("<Lon>")) {
 
-                    try {
-                        double lat = Double.parseDouble(latStr);
-                        double lon = Double.parseDouble(lonStr);
-                        double alt = altStr.isEmpty() ? 0.0 : Double.parseDouble(altStr);
+                    String name = extractXmlTag(point, "name", "Name");
+                    String latStr = extractXmlTag(point, "lat", "Lat");
+                    String lonStr = extractXmlTag(point, "lon", "Lon");
+                    String altStr = extractXmlTag(point, "alt", "Alt");
 
-                        geoDataList.add(new GeoData(name, lat, lon, alt));
-                    } catch (NumberFormatException e) {
-                        System.err.println("Ошибка парсинга координат: " + point);
+                    if (!name.isEmpty() && !latStr.isEmpty() && !lonStr.isEmpty()) {
+                        try {
+                            // Заменяем запятые на точки
+                            latStr = latStr.replace(',', '.');
+                            lonStr = lonStr.replace(',', '.');
+                            altStr = altStr.replace(',', '.');
+
+                            double lat = Double.parseDouble(latStr);
+                            double lon = Double.parseDouble(lonStr);
+                            double alt = altStr.isEmpty() ? 0.0 : Double.parseDouble(altStr);
+
+                            geoDataList.add(new GeoData(name, lat, lon, alt));
+                            System.out.println("Загружена точка: " + name + " " + lat + " " + lon);
+                        } catch (NumberFormatException e) {
+                            System.err.println("Ошибка парсинга координат: " + point);
+                        }
                     }
                 }
             }
         }
     }
 
-    private String extractXmlTag(String xml, String tag) {
-        String openTag = "<" + tag + ">";
-        String closeTag = "</" + tag + ">";
-        int start = xml.indexOf(openTag);
-        int end = xml.indexOf(closeTag);
-        if (start >= 0 && end > start) {
-            return xml.substring(start + openTag.length(), end).trim();
+    private String extractXmlTag(String xml, String... tagNames) {
+        for (String tagName : tagNames) {
+            String openTag = "<" + tagName + ">";
+            String closeTag = "</" + tagName + ">";
+            int start = xml.indexOf(openTag);
+            int end = xml.indexOf(closeTag);
+
+            if (start < 0) {
+                // Пробуем без угловых скобок
+                openTag = "<" + tagName;
+                closeTag = "</" + tagName + ">";
+                start = xml.indexOf(openTag);
+                if (start >= 0) {
+                    start = xml.indexOf(">", start) + 1;
+                    end = xml.indexOf(closeTag);
+                }
+            }
+
+            if (start >= 0 && end > start) {
+                if (start < end) {
+                    return xml.substring(start + openTag.length(), end).trim();
+                }
+            }
         }
         return "";
     }
@@ -1086,6 +1162,7 @@ public class LoginApp extends JFrame {
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.insets = new Insets(5, 5, 5, 5);
 
+        // Поле для имени пользователя
         gbc.gridx = 0;
         gbc.gridy = 0;
         panel.add(new JLabel("Логин:"), gbc);
@@ -1094,6 +1171,7 @@ public class LoginApp extends JFrame {
         usernameField = new JTextField(15);
         panel.add(usernameField, gbc);
 
+        // Поле для пароля
         gbc.gridx = 0;
         gbc.gridy = 1;
         panel.add(new JLabel("Пароль:"), gbc);
@@ -1102,6 +1180,7 @@ public class LoginApp extends JFrame {
         passwordField = new JPasswordField(15);
         panel.add(passwordField, gbc);
 
+        // Кнопка авторизации
         gbc.gridx = 0;
         gbc.gridy = 2;
         gbc.gridwidth = 2;
@@ -1111,31 +1190,64 @@ public class LoginApp extends JFrame {
         loginButton.setPreferredSize(new Dimension(100, 30));
         panel.add(loginButton, gbc);
 
-        loginButton.addActionListener(new ActionListener() {
+        // Добавляем обработчик для кнопки
+        loginButton.addActionListener(e -> performLogin());
+
+        // Добавляем обработчик для клавиши Enter
+        ActionListener enterAction = e -> performLogin();
+
+        // Регистрируем Enter для полей ввода
+        usernameField.addActionListener(enterAction);
+        passwordField.addActionListener(enterAction);
+
+        // Также добавляем KeyListener для совместимости
+        KeyAdapter enterKeyAdapter = new KeyAdapter() {
             @Override
-            public void actionPerformed(ActionEvent e) {
-                String username = usernameField.getText();
-                String password = new String(passwordField.getPassword());
-
-                if (username.equals("admin") && password.equals("123")) {
-                    JOptionPane.showMessageDialog(LoginApp.this,
-                        "Авторизация успешна!",
-                        "Успех",
-                        JOptionPane.INFORMATION_MESSAGE);
-
-                    dispose();
-                    openFullScreenWindow();
-
-                } else {
-                    JOptionPane.showMessageDialog(LoginApp.this,
-                        "Неверный логин или пароль",
-                        "Ошибка",
-                        JOptionPane.ERROR_MESSAGE);
+            public void keyPressed(KeyEvent e) {
+                if (e.getKeyCode() == KeyEvent.VK_ENTER) {
+                    performLogin();
                 }
+            }
+        };
+
+        usernameField.addKeyListener(enterKeyAdapter);
+        passwordField.addKeyListener(enterKeyAdapter);
+
+        // Устанавливаем фокус на поле логина при запуске
+        addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowOpened(java.awt.event.WindowEvent e) {
+                usernameField.requestFocus();
             }
         });
 
         add(panel);
+    }
+
+    // Метод для выполнения авторизации
+    private void performLogin() {
+        String username = usernameField.getText();
+        String password = new String(passwordField.getPassword());
+
+        if (username.equals("admin") && password.equals("123")) {
+            JOptionPane.showMessageDialog(LoginApp.this,
+                "Авторизация успешна!",
+                "Успех",
+                JOptionPane.INFORMATION_MESSAGE);
+
+            dispose();
+            openFullScreenWindow();
+
+        } else {
+            JOptionPane.showMessageDialog(LoginApp.this,
+                "Неверный логин или пароль",
+                "Ошибка",
+                JOptionPane.ERROR_MESSAGE);
+
+            // Очищаем поле пароля при ошибке
+            passwordField.setText("");
+            passwordField.requestFocus(); // Возвращаем фокус в поле пароля
+        }
     }
 
     private void openFullScreenWindow() {
